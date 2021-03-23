@@ -1,0 +1,197 @@
+/* NumProc to calculate upper bound error of dual problem
+ * Extension module for netgen/ngsolve.
+ * Copyright (C) 2015-2016 Navid Rahimi <RahimiA@cardiff.ac.uk>,
+ *                         Cardiff University
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include <solve.hpp>
+
+using namespace ngsolve;
+
+class NumProcNUPsi : public NumProc
+{
+protected:
+  // grid function provides the solution vector of the defeatured dual PDE
+  GridFunction * gfpsibar;
+
+  //Solution vector restricted to the feature domain
+  GridFunction * gfpsibar_f;
+
+  // bilinear form for the defeatured dual
+  BilinearForm * bf;
+
+  // Feature domain
+  int domain_interest;
+
+  // Factor (times eps0)
+  double factor;
+
+  // Verbose output
+  bool verbose;
+
+public:
+
+  NumProcNUPsi (PDE & apde, const Flags & flags)
+    : NumProc (apde)
+  {
+    // in the input-file, you specify the primal and dual gridfunction as
+    // -primal=u -dual=phi -feature=N [-verbose]
+
+    gfpsibar = pde.GetGridFunction (flags.GetStringFlag ("dual", "psibar"));
+    gfpsibar_f = pde.GetGridFunction (flags.GetStringFlag ("dual.rest", "psibar_f"));
+    bf = pde.GetBilinearForm(flags.GetStringFlag ("bfdfd", "a_integral"));
+    factor = flags.GetNumFlag("factor", 1);
+    domain_interest = flags.GetNumFlag ("domain", 1) - 1; // -1 as outside domain is 0, so domain 1 is really domain 0, etc.
+    verbose = flags.GetDefineFlag("verbose");
+  }
+
+  virtual ~NumProcNUPsi()
+  { ; }
+
+  // creates a solver object
+  static NumProc * Create (PDE & pde, const Flags & flags)
+  {
+    return new NumProcNUPsi (pde, flags);
+  }
+
+  // solve at one level
+  virtual void Do(LocalHeap & lh)
+  {
+    cout << "Compute Upper Bound Error Element For Dual Problem in feature domain " << domain_interest << endl;
+
+    if (verbose) {
+      cout << "Dual GridFunction info:\n";
+      gfpsibar->PrintReport (cout);
+    }
+
+    FESpace *fes = const_cast<FESpace*> (&gfpsibar->GetFESpace ());
+    if (verbose) {
+      cout << "FESpace info:\n";
+      fes->PrintReport (cout);
+    }
+
+    if (fes->DefinedOn (domain_interest)) {
+      if (verbose) {
+        cout << "Is defined on Domain " << domain_interest << "\n";
+      }
+
+      // Setup the bilinear component vectors
+      // the dual solution vector restricted to feature domain
+      FlatVector<double> psibar_f_vec = gfpsibar_f->GetVector (). FV<double> ();
+
+
+      // Find domain in the mesh
+      // Get MeshAccess object
+      MeshAccess & ma = pde.GetMeshAccess ();
+
+      // DOFs
+      int ndof = 0;
+      int feature_ndof = 0;
+      int n_feature = 0;
+     // Number of Elements in mesh
+      int ne = ma.GetNE ();
+      // Degree of freedoms array for DoFs of individual mesh element.
+      Array<int> dnums;
+      //Final NUPsi result
+      double Res = 0.0;
+      // Check domains of all elements
+      for (int l = 0; l < ne; ++l) {
+        lh.CleanUp ();
+        const FiniteElement & fel = fes->GetFE (l, lh);
+        ndof += fel.GetNDof ();
+        fes->GetDofNrs (l, dnums);
+
+        // Get Element domain:
+        int eldom = ma.GetElIndex (l); // Domain of element l
+        if (eldom == domain_interest) {
+          feature_ndof += fel.GetNDof ();
+          n_feature++;
+        }
+        for (int l = 0; l < dnums.Size ();++l) {
+          if (dnums[l] != -1) {
+            psibar_f_vec[dnums[l]] = (eldom == domain_interest) ? gfpsibar->GetVector () . FV<double> () [dnums[l]] : 0;
+           }
+         }
+      }
+
+      BaseVector *Kpsibar_base = bf->CreateVector ();
+      FlatVector<double> Kpsibar_vec = Kpsibar_base->FV<double> ();
+
+      bf->ApplyMatrix (gfpsibar_f->GetVector (), *Kpsibar_base);
+
+      double res = 0.0;
+      for (int l = 0; l < psibar_f_vec.Size (); ++l) {
+        res += psibar_f_vec[l] * Kpsibar_vec[l]; // / e0
+      }
+      Res = factor * res; // (3 - 1)^2 * e0^2 / 1 * e0 * res = 4 * e0 * res
+      cout << "DOFs: " << feature_ndof << " DOFs of " << ndof << " in " << n_feature << " features of domain\n";
+      cout << "NuPsi^2: " << Res << "\n";
+    } else {
+      cout << "ERROR: grid function not defined on Domain " << domain_interest << "\n";
+    }
+
+    cout << "End Compute Dual Upper Bound Error in Feature Domain" << endl;
+  }
+
+
+  virtual string GetClassName () const
+  {
+    return "Upper Bound Error of Dual Problem in Feature Domain";
+  }
+
+  virtual void PrintReport (ostream & ost)
+  {
+    ost << GetClassName() << endl
+	<< "Domain    = " << domain_interest << endl
+	<< "Dual    = " << gfpsibar->GetName() << endl;
+  }
+
+  ///
+  static void PrintDoc (ostream & ost)
+  {
+    ost << "\n\nQOI:\n"
+        << "------------------------\n"
+        << "Calculate error in quantity of interest for given feature domain\n"
+        << "Required flags:\n"
+        << "-dual=<gfname>\n"
+        << "    dual grid-function\n"
+        << "-feature=<domain-number>\n"
+        << "    number of domain from geometry file of feature\n"
+        << "-bf=<bilinear-form>\n"
+        << "    bilinear form for dual grid function\n"
+        << "-verbose\n"
+        << "    verbose output\n"
+        << endl;
+  }
+};
+
+
+namespace nu_psi_cpp
+{
+  class Init
+  {
+  public:
+    Init ();
+  };
+
+  Init::Init()
+  {
+    GetNumProcs().AddNumProc ("nu_psi", NumProcNUPsi::Create, NumProcNUPsi::PrintDoc);
+  }
+
+  Init init;
+}
+
