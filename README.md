@@ -6,3 +6,4 @@ Simplifying the geometry of a CAD model using defeaturing techniques enables mor
 
 N. Rahimi, P. Kerfriden, F. C. Langbein, R.R. Martin. CAD Model simplification error estimation for electrostatics problems. SIAM J. Sci. Comput. 40(1):B196–B227, 2018 [pdf](https://epubs.siam.org/doi/10.1137/16M1078641)
 
+![SimpErrES-4 25](https://user-images.githubusercontent.com/8395231/112233930-455ee600-8c33-11eb-8da9-3fa3072f3628.png)
